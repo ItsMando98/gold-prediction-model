@@ -5,12 +5,12 @@ Phase 7 baseline the plan asks to build before any ML model. Every
 component score is 0-100 on the same convention as the final score
 (section 26): 0 = strongly bullish, 50 = neutral, 100 = strongly bearish.
 
-Three components -- Fed expectations, positioning, and news/events --
-require data this MVP does not ingest yet (plan phases 3, 4, 5). Rather
-than fabricate a number, they are held at neutral (50, zero tilt) and
-flagged ``available=False`` so confidence calculation (section 78) can
-discount the prediction accordingly instead of silently pretending the
-score is fully informed.
+Positioning (CFTC COT, phase 4) and news (phase 5) are real once data has
+been ingested for a given as_of -- otherwise, like Fed expectations (phase
+3, still no free data source), they're held at neutral (50, zero tilt)
+and flagged ``available=False`` so confidence calculation (section 78)
+discounts the prediction instead of silently pretending it's fully
+informed.
 """
 
 from dataclasses import dataclass, field
@@ -145,14 +145,60 @@ def _cross_asset_component(features: dict[str, float | None]) -> ComponentScore:
     )
 
 
+def _positioning_component(features: dict[str, float | None]) -> ComponentScore:
+    """Plan section 12: crowding/liquidation-risk from CFTC Managed Money positioning."""
+    z1y = features.get("cot_position_zscore_1y")
+    if z1y is None:
+        return ComponentScore("positioning", WEIGHTS["positioning"], 50.0, available=False)
+
+    raw = z1y * 15.0  # crowded net-long -> bearish tilt; crowded net-short -> bullish tilt
+    drivers = [f"COT managed-money net-spec z-score(1y) {z1y:+.2f}"]
+
+    xau_5d = features.get("xauusd_return_5d")
+    long_chg = features.get("cot_weekly_long_change")
+    short_chg = features.get("cot_weekly_short_change")
+    if (
+        z1y > 1.0
+        and xau_5d is not None
+        and xau_5d < 0
+        and long_chg is not None
+        and short_chg is not None
+        and long_chg < 0
+        and short_chg > 0
+    ):
+        raw += 20.0
+        drivers.append("gold falling while managed-money longs unwind and shorts build -- liquidation risk")
+    elif z1y < -1.0 and xau_5d is not None and xau_5d > 0:
+        raw -= 10.0
+        drivers.append("washed-out positioning with gold recovering -- short-squeeze potential")
+
+    score = bounded_score(raw, scale=30.0)
+    return ComponentScore("positioning", WEIGHTS["positioning"], score, available=True, drivers=drivers)
+
+
+def _news_component(features: dict[str, float | None]) -> ComponentScore:
+    """Plan sections 17-20: aggregated recent News Event Agent output."""
+    net_score = features.get("news_net_score")
+    event_count = features.get("news_event_count")
+    if net_score is None or not event_count:
+        return ComponentScore("news", WEIGHTS["news"], 50.0, available=False)
+
+    score = bounded_score(net_score, scale=1.0)
+    max_conf = features.get("news_max_confidence")
+    drivers = [f"{int(event_count)} recent event(s), peak confidence {max_conf:.2f}" if max_conf else ""]
+    return ComponentScore(
+        "news", WEIGHTS["news"], score, available=True, drivers=[d for d in drivers if d]
+    )
+
+
 def compute_deterministic_score(features: dict[str, float | None]) -> DeterministicScoreResult:
     components = [
         _rates_component(features),
         _usd_component(features),
-        ComponentScore("fed", WEIGHTS["fed"], 50.0, available=False),  # phase 3
-        ComponentScore("positioning", WEIGHTS["positioning"], 50.0, available=False),  # phase 4
+        ComponentScore("fed", WEIGHTS["fed"], 50.0, available=False),  # phase 3: no free data source yet
+        _positioning_component(features),
         _technical_component(features),
-        ComponentScore("news", WEIGHTS["news"], 50.0, available=False),  # phase 5
+        _news_component(features),
         _oil_inflation_component(features),
         _cross_asset_component(features),
     ]

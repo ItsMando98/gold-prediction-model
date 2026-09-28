@@ -1,3 +1,10 @@
 """Importing this package registers all feature definitions."""
 
-from packages.features.definitions import cross_asset, rates, returns, technical  # noqa: F401
+from packages.features.definitions import (  # noqa: F401
+    cross_asset,
+    news,
+    positioning,
+    rates,
+    returns,
+    technical,
+)

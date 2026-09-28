@@ -20,3 +20,10 @@ fred:
   US05Y: "DGS5"
   US10Y: "DGS10"
   US10Y_REAL: "DFII10"
+
+# CFTC Disaggregated Futures-Only COT report (Socrata dataset 72hh-3qpy),
+# https://publicreporting.cftc.gov/resource/72hh-3qpy.json -- keyed by the
+# report's `market_and_exchange_names` value.
+cftc_cot:
+  GC: "GOLD - COMMODITY EXCHANGE INC."
+  SILVER: "SILVER - COMMODITY EXCHANGE INC."

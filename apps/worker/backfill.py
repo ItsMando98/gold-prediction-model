@@ -3,8 +3,9 @@
 Usage:
     python -m apps.worker.backfill --start 2015-01-01 --end 2026-09-28
 
-Requires network access to query1.finance.yahoo.com and (for rates)
-api.stlouisfed.org with FRED_API_KEY set -- see README.md.
+Requires network access to query1.finance.yahoo.com, api.stlouisfed.org
+(rates, needs FRED_API_KEY), and publicreporting.cftc.gov (COT, no key
+required) -- see README.md.
 """
 
 import argparse
@@ -15,13 +16,19 @@ from packages.common.config import get_settings
 from packages.common.db.session import get_sessionmaker
 from packages.common.logging import configure_logging, get_logger
 from packages.common.symbols import CORE_SYMBOLS
-from packages.ingestion.pipeline import ingest_price_history, ingest_rate_history
+from packages.ingestion.pipeline import (
+    ingest_positioning_history,
+    ingest_price_history,
+    ingest_rate_history,
+)
+from packages.ingestion.providers.cftc_cot import CftcCotProvider
 from packages.ingestion.providers.fred import FredProvider
 from packages.ingestion.providers.yahoo_finance import YahooFinanceProvider
 
 logger = get_logger(__name__)
 
 _RATE_SYMBOLS = {"US02Y", "US05Y", "US10Y", "US10Y_REAL"}
+_COT_SYMBOLS = ["GC", "SILVER"]
 
 
 def _parse_date(value: str) -> datetime:
@@ -35,16 +42,19 @@ async def run(start: datetime, end: datetime) -> None:
 
     yahoo = YahooFinanceProvider()
     fred = FredProvider(api_key=settings.fred_api_key)
+    cftc = CftcCotProvider()
 
     session = get_sessionmaker()()
     try:
         price_results = await ingest_price_history(session, [yahoo], price_symbols, start, end)
         rate_results = await ingest_rate_history(session, [fred], rate_symbols, start, end)
-        logger.info("backfill_complete", prices=price_results, rates=rate_results)
+        cot_results = await ingest_positioning_history(session, [cftc], _COT_SYMBOLS, start, end)
+        logger.info("backfill_complete", prices=price_results, rates=rate_results, cot=cot_results)
     finally:
         session.close()
         await yahoo.aclose()
         await fred.aclose()
+        await cftc.aclose()
 
 
 def main() -> None:

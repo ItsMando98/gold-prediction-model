@@ -76,3 +76,36 @@ def test_data_completeness_reflects_available_components():
     result = compute_deterministic_score(features)
     # rates, usd, technical, oil_inflation, cross_asset available; fed/positioning/news not
     assert result.data_completeness == 5 / 8
+
+
+def test_positioning_component_bearish_on_crowded_long_liquidation():
+    features = {
+        "cot_position_zscore_1y": 2.0,
+        "xauusd_return_5d": -0.02,
+        "cot_weekly_long_change": -3000.0,
+        "cot_weekly_short_change": 1500.0,
+    }
+    result = compute_deterministic_score(features)
+    positioning = next(c for c in result.components if c.name == "positioning")
+    assert positioning.available is True
+    assert positioning.score > 50.0
+    assert "liquidation" in positioning.drivers[0] or any("liquidation" in d for d in positioning.drivers)
+
+
+def test_positioning_component_bullish_on_washed_out_squeeze():
+    features = {"cot_position_zscore_1y": -1.8, "xauusd_return_5d": 0.02}
+    result = compute_deterministic_score(features)
+    positioning = next(c for c in result.components if c.name == "positioning")
+    assert positioning.available is True
+    assert positioning.score < 50.0
+
+
+def test_news_component_requires_both_net_score_and_event_count():
+    result = compute_deterministic_score({"news_net_score": -0.5})  # no event count
+    news = next(c for c in result.components if c.name == "news")
+    assert news.available is False
+
+    result = compute_deterministic_score({"news_net_score": 0.5, "news_event_count": 2})
+    news = next(c for c in result.components if c.name == "news")
+    assert news.available is True
+    assert news.score > 50.0

@@ -3,24 +3,33 @@
 ## Layers
 
 ```
-packages/ingestion    - vendor-agnostic provider ABCs + Yahoo Finance / FRED
-                         implementations + failover pipeline + provider_health
-packages/common       - Observation/Bar schemas, DB models, config, logging
+packages/ingestion    - vendor-agnostic provider ABCs + Yahoo Finance / FRED /
+                         CFTC COT implementations + failover pipeline + provider_health
+packages/common       - Observation/Bar/CotRecord/NewsEvent schemas, DB models,
+                         config, logging
+packages/news         - source-tier credibility mapping, article dedup
 packages/features     - point-in-time data access, indicators, versioned
-                         feature registry
+                         feature registry (prices, rates, COT, news aggregation)
 packages/regimes      - rule-based regime classifier
 packages/signals       - deterministic Gold Risk Score ("Model A"), confidence,
                          key levels, confirmation/invalidation
-packages/snapshots     - Friday snapshot generator that ties the above into an
-                         immutable Prediction
-apps/api               - FastAPI, read-only over the predictions/regime/health tables
-apps/worker             - APScheduler jobs (daily ingestion, weekly prediction) + backfill CLI
+packages/snapshots     - Friday payload builder + single-insert persistence
+packages/backtesting   - point-in-time dataset builder, forward-return labels,
+                         walk-forward splits, classification/calibration metrics
+packages/models         - ML baselines (Model B), ModelVersion registry,
+                         training pipeline, deterministic+ML ensemble
+packages/agents         - the 8 specialist agents (plan section 50) + orchestrator
+apps/api               - FastAPI, read-only over predictions/regime/health/model tables
+apps/worker             - APScheduler jobs (daily ingestion, weekly Agent Team run) + backfill CLI
 apps/dashboard          - Next.js App Router, server-rendered overview page
 ```
 
-Data flows one way: providers → raw store (`market_prices`, `rates`) →
-features → regime + score → predictions. Nothing downstream writes back
-upstream, and predictions are never updated in place (plan section 27).
+Data flows one way: providers → raw store (`market_prices`, `rates`,
+`cot_positions`, `news_articles`/`news_events`) → features → regime + score
+→ predictions. Nothing downstream writes back upstream, and predictions
+are never updated in place (plan section 27) — see "Agent Team" below for
+how the orchestrator still fits a narrative and an ML score into that rule
+rather than around it.
 
 ## Point-in-time correctness
 
@@ -44,6 +53,15 @@ This is the one invariant every other design decision serves.
   Postgres will reject a batch that tries to upsert two of them in the
   same statement). A restated value gets the *next* revision number, not
   a mutated `available_at` on the same revision.
+- News events are gated the same way, just on a different column: an
+  event can never be knowable before the article it came from was
+  published, so `recent_news_events` filters on `NewsArticle.published_at`,
+  not on when the News Event Agent happened to run its extraction.
+- The **one** deliberate exception is `full_price_history` in
+  `data_access.py`, used only by `packages/backtesting/labels.py` to
+  compute forward-return labels — looking forward from `as_of` is the
+  entire point of a label. Using it inside a feature definition is the
+  leakage bug this whole design exists to prevent.
 
 If you add a new data source or feature, read through `data_access.py` and
 respect this or you will introduce leakage that silently overstates
@@ -67,10 +85,12 @@ changing history.
 `packages/signals/deterministic.py` computes eight weighted components
 (rates, USD, Fed, positioning, technical, news, oil/inflation, cross-asset;
 weights from plan section 73). Each component is 0-100 (50 = neutral) and
-contributes `weight * (score - 50)` to the final score. Components without
-underlying data (Fed, positioning, news — later phases) stay pinned at
-neutral with `available=False` rather than being faked; `data_completeness`
-and `confidence` both discount for this explicitly.
+contributes `weight * (score - 50)` to the final score. Positioning
+(crowding/liquidation-risk from CFTC COT) and news (aggregated,
+tier-capped News Event Agent output) are real whenever data exists for a
+given `as_of`; Fed stays pinned at neutral (`available=False`) because no
+free data source has been identified for it yet. `data_completeness` and
+`confidence` both discount for whatever's actually missing.
 
 The oil/inflation component deliberately flips sign based on whether real
 yields are also rising (plan section 10: oil's effect on gold is
@@ -87,11 +107,85 @@ require COT/ETF/news (`POSITIONING_LIQUIDATION`, `POSITIONING_SHORT_SQUEEZE`,
 `GOLD_SPECIFIC_FLOW`, `INFLATION_HEDGE`) are structurally unreachable until
 those phases exist, and fall back to `MIXED` instead of guessing.
 
+## ML models and the ensemble (plan sections 24-25, 61-62)
+
+`packages/backtesting/dataset.py` builds a point-in-time dataset: one row
+per `as_of`, with the exact feature vector `compute_features` would have
+produced live, paired with forward-return labels from
+`packages/backtesting/labels.py`. `packages/models/train.py` walk-forward
+evaluates a model type (`packages/backtesting/walk_forward.py` — rolling
+chronological windows, never a random split) and, if asked to register,
+fits a final model on the full dataset, saves the artifact
+(`packages/models/io.py`), and writes a `ModelVersion` row with
+`status="candidate"`.
+
+Nothing here ever sets `status="active"` itself. `packages/models/ensemble.py:
+get_active_model_version` only ever reads an `active` row, so a model
+stays inert — the deterministic score runs alone — until a human promotes
+one after reviewing real walk-forward metrics (plan section 86: "backtest
+before live trust"). When a model is active, `PredictionAgent` blends its
+probability into the deterministic score (`ensemble.combine`) and, if that
+blend crosses a bias-bucket boundary (plan section 26), recomputes
+bias/confirmation/invalidation/contradictions against the *blended* score
+before anything is persisted — see the docstring on
+`packages/agents/prediction_agent.py`.
+
+## Agent Team (plan section 50)
+
+`packages/agents/` implements the plan's 8 specialist agents as
+independently testable modules, each returning a uniform `AgentResult`:
+
+| Agent | What it actually does |
+|---|---|
+| MarketDataAgent | thin wrapper over the ingestion pipeline (collect/validate/store) |
+| RatesMacroAgent | summarizes rate levels/changes/curve slope; reports Fed data honestly as unavailable |
+| PositioningAgent | CFTC COT ingestion + crowding/liquidation-risk summary |
+| NewsEventAgent | **Claude-backed** — `classify_article` calls `client.messages.parse(..., output_format=NewsEvent)` so the model's read of an article is a schema-validated, causally-explicit `transmission_chain`, never free-text sentiment (plan section 58) |
+| RegimeAgent | runs the classifier, persists a `RegimeSnapshot`, detects a change vs. the last one for that symbol |
+| PredictionAgent | assembles features, computes the deterministic score, blends in an active ML model if one exists |
+| ExplanationAgent | **Claude-backed** — turns a *finalized* `PredictionPayload` into prose; it has no mechanism to write to any numeric field, so it structurally cannot "explain" a prediction into a different score |
+| BacktestAgent | wraps dataset-building + walk-forward evaluation/training for reporting |
+
+`packages/agents/orchestrator.py: run_weekly_pipeline` runs
+Positioning → RatesMacro → (News, if articles are supplied) →
+Prediction → Regime → Explanation, then makes the single INSERT
+(`persist_prediction_payload`) that turns all of it into one immutable
+`Prediction` row. This is why `packages/snapshots/friday.py` is split into
+`build_prediction_payload` (pure computation) and `persist_prediction_payload`
+(the one write): the Explanation Agent's narrative and an active model's
+score have to exist *before* that insert, because nothing about a
+`Prediction` is ever updated afterward.
+
+Both Claude-backed agents take their `anthropic.Anthropic` client as an
+argument (constructed via `get_client()`, which raises a clear
+`ProviderError` if `ANTHROPIC_API_KEY` isn't configured, exactly like the
+FRED/CFTC providers do for their own missing keys). Tests inject a fake
+client (`tests/anthropic_fakes.py`) and never make a live call. In
+`orchestrator.py`, a failure to generate a narrative is caught narrowly
+(`ProviderError` only — a missing key or a real API error) and downgraded
+to a best-effort skip so it never blocks the numeric prediction from being
+persisted; any other exception is a bug and is allowed to propagate rather
+than being silently swallowed (plan section 51).
+
 ## Adding a provider
 
-Implement `PriceProvider` or `RateProvider` from `packages/ingestion/base.py`,
-add the vendor ticker mapping to `configs/providers/symbols.yaml`, and put
-it first (or as a fallback) in the provider list passed to
-`ingest_price_history`/`ingest_rate_history` in `apps/worker/jobs.py`. Every
-attempt — success or failure — is recorded in `provider_health`
-automatically by the pipeline.
+Implement `PriceProvider`, `RateProvider`, or `PositioningProvider` from
+`packages/ingestion/base.py`, add the vendor ticker mapping to
+`configs/providers/symbols.yaml`, and put it first (or as a fallback) in
+the provider list passed to `ingest_price_history`/`ingest_rate_history`/
+`ingest_positioning_history` — wired up in `apps/worker/jobs.py` (daily)
+and `packages/agents/market_data_agent.py`/`positioning_agent.py` (via the
+orchestrator). Every attempt — success or failure — is recorded in
+`provider_health` automatically by the pipeline.
+
+## Worker scheduling
+
+`apps/worker/main.py` schedules two jobs: `ingest_daily` (weekdays, prices
++ rates + COT) and `generate_weekly_prediction` (Fridays, the full Agent
+Team pipeline via `orchestrator.run_weekly_pipeline`). The weekly job
+doesn't re-ingest market data itself (`ingest_market_data=False`) since the
+daily job already keeps things current; it always attempts a narrative
+(`generate_narrative=True`) and simply gets `narrative=None` back if
+`ANTHROPIC_API_KEY` isn't configured. No live news feed is connected, so
+`news_articles` is never populated automatically yet — see
+`docs/ROADMAP.md`.

@@ -25,6 +25,8 @@ export interface Prediction {
   event_risks: unknown[];
   invalidation: string[];
   model_versions: Record<string, unknown>;
+  narrative: string | null;
+  ml_score: number | null;
   drivers: PredictionDriver[];
 }
 

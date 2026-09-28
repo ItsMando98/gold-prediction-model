@@ -9,7 +9,7 @@ callers.
 from abc import ABC, abstractmethod
 from datetime import datetime
 
-from packages.common.schemas import Bar, Observation
+from packages.common.schemas import Bar, CotRecord, Observation
 
 
 class ProviderError(RuntimeError):
@@ -55,3 +55,17 @@ class RateProvider(ABC):
     @abstractmethod
     def supports(self, symbol: str) -> bool:
         """Whether this provider has a series mapping for ``symbol``."""
+
+
+class PositioningProvider(ABC):
+    """Source of CFTC Commitment of Traders reports."""
+
+    name: str
+
+    @abstractmethod
+    async def get_history(self, symbol: str, start: datetime, end: datetime) -> list[CotRecord]:
+        """Return weekly COT reports covering ``[start, end]``, oldest first."""
+
+    @abstractmethod
+    def supports(self, symbol: str) -> bool:
+        """Whether this provider has a market-name mapping for ``symbol``."""

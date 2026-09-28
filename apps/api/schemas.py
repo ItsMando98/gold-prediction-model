@@ -36,10 +36,14 @@ class PredictionOut(BaseModel):
     feature_snapshot_id: str | None
     config_version: str
     code_commit: str | None
+    narrative: str | None
+    ml_score: float | None
     drivers: list[PredictionDriverOut]
 
 
 class RegimeOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     symbol: str
     as_of: datetime
     regime: str
@@ -55,3 +59,15 @@ class ProviderHealthOut(BaseModel):
     status: str
     latency_ms: float | None
     message: str | None
+
+
+class ModelVersionOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    name: str
+    model_type: str
+    feature_set_version: str
+    trained_at: datetime
+    status: str
+    metrics: dict

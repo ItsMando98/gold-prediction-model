@@ -18,6 +18,9 @@ data/
 *.parquet
 *.duckdb
 
+# trained model artifacts (see packages/models/io.py)
+infra/models/*.joblib
+
 # node / dashboard
 apps/dashboard/node_modules/
 apps/dashboard/.next/

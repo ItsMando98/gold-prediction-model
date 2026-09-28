@@ -11,9 +11,9 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 
 from packages.common.logging import get_logger
-from packages.ingestion.base import PriceProvider, ProviderError, RateProvider
+from packages.ingestion.base import PositioningProvider, PriceProvider, ProviderError, RateProvider
 from packages.ingestion.health import record_health
-from packages.ingestion.store import persist_bars, persist_observations
+from packages.ingestion.store import persist_bars, persist_cot_records, persist_observations
 
 logger = get_logger(__name__)
 
@@ -98,5 +98,51 @@ async def ingest_rate_history(
                 logger.warning("rate_provider_failed", symbol=symbol, provider=provider.name, error=str(exc))
         else:
             logger.error("no_rate_provider_supported_symbol", symbol=symbol)
+        session.commit()
+    return results
+
+
+async def ingest_positioning_history(
+    session: Session,
+    providers: list[PositioningProvider],
+    symbols: list[str],
+    start: datetime,
+    end: datetime,
+) -> dict[str, int]:
+    """Backfill weekly COT history for each symbol via the first supporting provider."""
+    results: dict[str, int] = {}
+    for symbol in symbols:
+        results[symbol] = 0
+        for provider in providers:
+            if not provider.supports(symbol):
+                continue
+            t0 = datetime.now()
+            try:
+                records = await provider.get_history(symbol, start, end)
+                latency_ms = (datetime.now() - t0).total_seconds() * 1000
+                record_health(
+                    session, source=provider.name, symbol=symbol, status="ok", latency_ms=latency_ms
+                )
+                count = persist_cot_records(session, records)
+                results[symbol] = count
+                logger.info(
+                    "ingested_positioning_history", symbol=symbol, provider=provider.name, count=count
+                )
+                break
+            except ProviderError as exc:
+                latency_ms = (datetime.now() - t0).total_seconds() * 1000
+                record_health(
+                    session,
+                    source=provider.name,
+                    symbol=symbol,
+                    status="down",
+                    latency_ms=latency_ms,
+                    message=str(exc),
+                )
+                logger.warning(
+                    "positioning_provider_failed", symbol=symbol, provider=provider.name, error=str(exc)
+                )
+        else:
+            logger.error("no_positioning_provider_supported_symbol", symbol=symbol)
         session.commit()
     return results

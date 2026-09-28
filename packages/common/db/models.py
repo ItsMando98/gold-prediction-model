@@ -1,16 +1,26 @@
-"""Core ORM models (plan section 48, MVP subset).
+"""Core ORM models (plan section 48).
 
-Only the tables the Phase 0 / Sprint-1 pipeline actually reads or writes
-are defined here: market_prices, rates, features, regimes, predictions,
-prediction_drivers, provider_health. Later phases (macro_releases,
-fed_expectations, cot_positions, etc.) get their own tables and migrations
-when that ingestion is actually implemented -- see docs/ROADMAP.md.
+Covers Phase 0/Sprint-1 (market_prices, rates, features, regimes,
+predictions, prediction_drivers, provider_health) plus Phase 4/5/9
+additions (cot_positions, news_articles, news_events, model_versions).
+Fed expectations / macro_releases / etf_flows / options_metrics still have
+no free public data source wired up -- see docs/ROADMAP.md.
 """
 
 import uuid
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, Float, ForeignKey, Index, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from packages.common.db.base import Base
@@ -128,6 +138,14 @@ class Prediction(Base):
     config_version: Mapped[str] = mapped_column(String, nullable=False)
     code_commit: Mapped[str | None] = mapped_column(String, nullable=True)
 
+    # Populated by the Explanation Agent after the score is finalized (plan section 50,
+    # Agent 7) -- read-only narrative, never fed back into risk_score/bias/confidence.
+    narrative: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Raw ML model probability (0-1, "down"), if an active ModelVersion was used;
+    # NULL whenever no trained model is registered yet. Distinct from `probabilities`,
+    # which stays empty until this is calibrated (plan sections 26 & 32).
+    ml_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+
     drivers: Mapped[list["PredictionDriver"]] = relationship(
         back_populates="prediction", cascade="all, delete-orphan"
     )
@@ -165,3 +183,102 @@ class ProviderHealth(Base):
     latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
     message: Mapped[str | None] = mapped_column(String, nullable=True)
     extra: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+
+
+class CotPosition(Base):
+    """CFTC Commitment of Traders report, Disaggregated (Managed Money/Producer/Swap
+    Dealer) categories for physical commodities (plan section 12)."""
+
+    __tablename__ = "cot_positions"
+    __table_args__ = (
+        UniqueConstraint("source", "symbol", "observed_at", "revision", name="uq_cot_position"),
+        Index("ix_cot_positions_symbol_observed_at", "symbol", "observed_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    source: Mapped[str] = mapped_column(String, nullable=False)
+    symbol: Mapped[str] = mapped_column(String, nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)  # report_date
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    open_interest: Mapped[float | None] = mapped_column(Float, nullable=True)
+    managed_money_long: Mapped[float | None] = mapped_column(Float, nullable=True)
+    managed_money_short: Mapped[float | None] = mapped_column(Float, nullable=True)
+    producer_long: Mapped[float | None] = mapped_column(Float, nullable=True)
+    producer_short: Mapped[float | None] = mapped_column(Float, nullable=True)
+    swap_dealer_long: Mapped[float | None] = mapped_column(Float, nullable=True)
+    swap_dealer_short: Mapped[float | None] = mapped_column(Float, nullable=True)
+    other_reportable_long: Mapped[float | None] = mapped_column(Float, nullable=True)
+    other_reportable_short: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    extra: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+
+
+class NewsArticle(Base):
+    """Raw news article, stored verbatim before any interpretation (plan section 34)."""
+
+    __tablename__ = "news_articles"
+    __table_args__ = (Index("ix_news_articles_published_at", "published_at"),)
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    source: Mapped[str] = mapped_column(String, nullable=False)
+    source_tier: Mapped[int] = mapped_column(Integer, nullable=False)  # 1 | 2 | 3, plan section 19
+    headline: Mapped[str] = mapped_column(String, nullable=False)
+    body: Mapped[str | None] = mapped_column(Text, nullable=True)
+    url: Mapped[str | None] = mapped_column(String, nullable=True)
+    published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    dedup_hash: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+
+    events: Mapped[list["NewsEventRecord"]] = relationship(
+        back_populates="article", cascade="all, delete-orphan"
+    )
+
+
+class NewsEventRecord(Base):
+    """Structured event extracted from a NewsArticle by the News Event Agent
+    (plan sections 17-20). ``available_at`` for downstream point-in-time use
+    is the article's ``published_at`` -- an event can never be knowable
+    before the article that produced it was published."""
+
+    __tablename__ = "news_events"
+    __table_args__ = (Index("ix_news_events_article_id", "article_id"),)
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    article_id: Mapped[str] = mapped_column(String, ForeignKey("news_articles.id"), nullable=False)
+    event: Mapped[str] = mapped_column(String, nullable=False)
+    category: Mapped[str] = mapped_column(String, nullable=False)
+    entities: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    direct_assets: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    transmission_chain: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    relevance: Mapped[float] = mapped_column(Float, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)  # already tier-capped
+    rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
+    model: Mapped[str] = mapped_column(String, nullable=False)  # which LLM/version produced this
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    article: Mapped["NewsArticle"] = relationship(back_populates="events")
+
+
+class ModelVersion(Base):
+    """Registry of trained ML models (plan section 48/81). A model only
+    influences live predictions once a row here has status='active' --
+    see packages/models/ensemble.py."""
+
+    __tablename__ = "model_versions"
+    __table_args__ = (Index("ix_model_versions_status", "status"),)
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    model_type: Mapped[str] = mapped_column(String, nullable=False)  # e.g. logistic_regression, lightgbm
+    feature_set_version: Mapped[str] = mapped_column(String, nullable=False)
+    trained_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    training_window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    training_window_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    metrics: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    status: Mapped[str] = mapped_column(  # candidate|active|retired
+        String, nullable=False, default="candidate"
+    )
+    artifact_path: Mapped[str | None] = mapped_column(String, nullable=True)
