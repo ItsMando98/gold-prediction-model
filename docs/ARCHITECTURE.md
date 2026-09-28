@@ -189,3 +189,24 @@ daily job already keeps things current; it always attempts a narrative
 `ANTHROPIC_API_KEY` isn't configured. No live news feed is connected, so
 `news_articles` is never populated automatically yet — see
 `docs/ROADMAP.md`.
+
+## Dashboard (plan section 44)
+
+`apps/dashboard/app/page.tsx` is a server component that fetches the
+current prediction and recent history, then composes them from
+`apps/dashboard/components/`: `RiskGauge` (a diverging linear gauge —
+bullish/neutral/bearish is a polarity, not a magnitude, so it gets the
+blue/gray/red diverging pair, not a single accent color), `StatTile`,
+`DriverBars` (a diverging horizontal bar chart with a table-view toggle
+for accessibility), `RiskHistoryChart` (a line-vs-baseline chart with a
+custom hover crosshair, area fill split at the neutral=50 line rather than
+at zero), and `StatusList` (confirmation/invalidation as icon+label, never
+color alone). All of it follows the design-system method in the bundled
+`dataviz` skill — `apps/dashboard/app/globals.css` defines the token set
+(diverging pair, sequential ramp, fixed status colors, chrome/ink) as CSS
+custom properties, redefined under both a `prefers-color-scheme: dark`
+media query and a `data-theme="dark"` override so `ThemeToggle` (which
+also fixes what it displays to the theme actually resolved — explicit
+choice, else live OS preference — rather than only the last click) can win
+over the OS setting. Colors are never chosen per-chart; every component
+reads the same custom properties.

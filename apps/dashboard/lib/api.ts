@@ -53,6 +53,10 @@ export function getCurrentPrediction(symbol = "XAUUSD") {
   return apiFetch<Prediction>(`/prediction/current?symbol=${symbol}`);
 }
 
+export function getPredictionHistory(symbol = "XAUUSD", limit = 12) {
+  return apiFetch<Prediction[]>(`/prediction/history?symbol=${symbol}&limit=${limit}`);
+}
+
 export function getDataHealth() {
   return apiFetch<ProviderHealth[]>("/data/health");
 }

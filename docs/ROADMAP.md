@@ -36,6 +36,7 @@ what's real.
 | §58 "LLM output must conform to Pydantic schema" | done — `NewsEvent` is validated via `client.messages.parse(..., output_format=NewsEvent)`, never free-text |
 | Explanation Agent "must never modify the score" (§50) | done by construction — `explain()` returns a plain string; the orchestrator assigns it to `PredictionPayload.narrative` only, after every numeric field is already fixed, and `Prediction` rows are still never updated in place |
 | `/model/health` (§43) | done |
+| §44 Dashboard, overview screen | redesigned — risk gauge (diverging bull/red scale), stat tiles, driver diverging-bar chart with a table-view toggle, a risk-score history trend chart with hover tooltips, narrative card, confirmation/invalidation as status lists, light/dark theming. Built to the design-system method in the `dataviz` skill (validated diverging/sequential/status palette, mark specs, hover-by-default). Still only `/` — secondary pages below remain open |
 
 ## Explicitly not real yet (stubbed, not faked)
 
