@@ -1,0 +1,33 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+dist/
+build/
+*.log
+
+# data
+data/
+*.parquet
+*.duckdb
+
+# node / dashboard
+apps/dashboard/node_modules/
+apps/dashboard/.next/
+apps/dashboard/out/
+node_modules/
+
+# editors
+.vscode/
+.idea/
+.DS_Store
+
+# research
+research/notebooks/.ipynb_checkpoints/

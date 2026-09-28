@@ -1,0 +1,20 @@
+from enum import StrEnum
+
+
+class Regime(StrEnum):
+    """Plan section 21. The MVP classifier only ever emits a subset of these
+    (the rest require positioning/news data from later phases) -- see
+    docs/ROADMAP.md."""
+
+    RATES_DOMINATED_BEARISH = "RATES_DOMINATED_BEARISH"
+    RATES_DOMINATED_BULLISH = "RATES_DOMINATED_BULLISH"
+    USD_DOMINATED = "USD_DOMINATED"
+    INFLATION_HEDGE = "INFLATION_HEDGE"
+    SAFE_HAVEN = "SAFE_HAVEN"
+    LIQUIDITY_CRISIS = "LIQUIDITY_CRISIS"
+    RISK_ON = "RISK_ON"
+    RISK_OFF = "RISK_OFF"
+    GOLD_SPECIFIC_FLOW = "GOLD_SPECIFIC_FLOW"
+    POSITIONING_LIQUIDATION = "POSITIONING_LIQUIDATION"
+    POSITIONING_SHORT_SQUEEZE = "POSITIONING_SHORT_SQUEEZE"
+    MIXED = "MIXED"

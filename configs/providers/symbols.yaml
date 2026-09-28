@@ -1,0 +1,22 @@
+# Canonical symbol -> vendor ticker mapping.
+# Application code must resolve tickers through this file (via
+# packages.ingestion.providers.*), never hard-code a vendor ticker inline.
+
+yahoo_finance:
+  XAUUSD: "XAUUSD=X"
+  GC: "GC=F"
+  DXY: "DX-Y.NYB"
+  BRENT: "BZ=F"
+  WTI: "CL=F"
+  VIX: "^VIX"
+  SILVER: "SI=F"
+  COPPER: "HG=F"
+  SPX: "^GSPC"
+  USDJPY: "JPY=X"
+  EURUSD: "EURUSD=X"
+
+fred:
+  US02Y: "DGS2"
+  US05Y: "DGS5"
+  US10Y: "DGS10"
+  US10Y_REAL: "DFII10"
